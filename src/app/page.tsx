@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 
-const WS_SERVER = "wss://remote-dog-face-123.deno.dev";
+const HTTP_SERVER = "https://remote-dog-face-123.deno.dev";
 
 interface AnimationTrigger {
   key: string;
@@ -26,172 +26,87 @@ const ANIMATION_TRIGGERS: AnimationTrigger[] = [
 ];
 
 export default function Home() {
-  const [isConnected, setIsConnected] = useState(false);
-  const [connectionStatus, setConnectionStatus] = useState('Disconnected');
+  const [isConnected, setIsConnected] = useState(true); // HTTP is always "connected"
+  const [connectionStatus, setConnectionStatus] = useState('Ready');
   const [currentTrigger, setCurrentTrigger] = useState<string | null>(null);
   const [lastPressed, setLastPressed] = useState<string | null>(null);
-  const [retryCount, setRetryCount] = useState(0);
-  const [messageQueue, setMessageQueue] = useState<string[]>([]);
-  
-  const wsRef = useRef<WebSocket | null>(null);
-  const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const heartbeatIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const lastHeartbeatRef = useRef<number>(Date.now());
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [lastError, setLastError] = useState<string | null>(null);
 
   useEffect(() => {
-    connectWebSocket();
+    // Monitor network status
+    const handleOnline = () => {
+      setIsOnline(true);
+      setConnectionStatus('Ready');
+      setLastError(null);
+    };
     
+    const handleOffline = () => {
+      setIsOnline(false);
+      setConnectionStatus('Offline');
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
     return () => {
-      cleanup();
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
     };
   }, []);
 
-  const cleanup = () => {
-    if (wsRef.current) {
-      wsRef.current.close();
-    }
-    if (reconnectTimeoutRef.current) {
-      clearTimeout(reconnectTimeoutRef.current);
-    }
-    if (heartbeatIntervalRef.current) {
-      clearInterval(heartbeatIntervalRef.current);
-    }
-  };
-
-  const startHeartbeat = () => {
-    if (heartbeatIntervalRef.current) {
-      clearInterval(heartbeatIntervalRef.current);
-    }
-    
-    heartbeatIntervalRef.current = setInterval(() => {
-      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-        const now = Date.now();
-        // If we haven't received a heartbeat response in 30 seconds, reconnect
-        if (now - lastHeartbeatRef.current > 30000) {
-          console.log('Heartbeat timeout, reconnecting...');
-          connectWebSocket();
-        } else {
-          // Send ping (the server should echo it back)
-          wsRef.current.send('ping');
-        }
-      }
-    }, 10000); // Send ping every 10 seconds
-  };
-
-  const processMessageQueue = () => {
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN && messageQueue.length > 0) {
-      const messages = [...messageQueue];
-      setMessageQueue([]);
-      messages.forEach(message => {
-        wsRef.current?.send(message);
-        console.log(`Sent queued message: ${message}`);
-      });
-    }
-  };
-
-  const connectWebSocket = () => {
-    cleanup();
-    
-    try {
-      console.log('🔄 Attempting DIRECT WebSocket connection from browser to:', WS_SERVER);
-      setConnectionStatus(`Connecting...${retryCount > 0 ? ` (attempt ${retryCount + 1})` : ''}`);
-      wsRef.current = new WebSocket(WS_SERVER);
-
-      wsRef.current.onopen = () => {
-        console.log('✅ WebSocket connected DIRECTLY from browser to Deno server');
-        console.log('📍 Client IP making connection:', window.navigator.userAgent);
-        console.log('🌐 Connection is client-side, NOT through Vercel servers');
-        setIsConnected(true);
-        setConnectionStatus('Connected (Direct)');
-        setRetryCount(0);
-        lastHeartbeatRef.current = Date.now();
-        startHeartbeat();
-        processMessageQueue(); // Process queued messages
-      };
-
-      wsRef.current.onmessage = (event) => {
-        const key = event.data;
-        lastHeartbeatRef.current = Date.now();
-        
-        // Ignore ping responses
-        if (key === 'ping' || key === 'pong') {
-          return;
-        }
-        
-        const trigger = ANIMATION_TRIGGERS.find(t => t.key === key);
-        if (trigger) {
-          setCurrentTrigger(trigger.name);
-          console.log(`Received trigger: ${trigger.name}`);
-        }
-      };
-
-      wsRef.current.onerror = (error) => {
-        console.error('WebSocket error:', error);
-        setIsConnected(false);
-        setConnectionStatus('Connection Error');
-      };
-
-      wsRef.current.onclose = (event) => {
-        console.log('Disconnected from server', { code: event.code, reason: event.reason });
-        setIsConnected(false);
-        setConnectionStatus('Disconnected');
-        
-        if (heartbeatIntervalRef.current) {
-          clearInterval(heartbeatIntervalRef.current);
-        }
-        
-        // Implement exponential backoff for reconnection
-        const backoffDelay = Math.min(1000 * Math.pow(2, retryCount), 30000); // Max 30 seconds
-        setRetryCount(prev => prev + 1);
-        
-        setConnectionStatus(`Reconnecting in ${Math.ceil(backoffDelay / 1000)}s...`);
-        
-        reconnectTimeoutRef.current = setTimeout(() => {
-          connectWebSocket();
-        }, backoffDelay);
-      };
-    } catch (error) {
-      console.error('Failed to connect:', error);
-      setConnectionStatus('Failed to connect');
-      setIsConnected(false);
-    }
-  };
-
-  const triggerAnimation = (key: string) => {
+  const triggerAnimation = async (key: string) => {
     const trigger = ANIMATION_TRIGGERS.find(t => t.key === key);
     if (!trigger) return;
 
     // Always update UI immediately for better UX
     setLastPressed(trigger.name);
     setCurrentTrigger(trigger.name);
-    console.log(`Triggering: ${key} (${trigger.name})`);
+    setConnectionStatus('Sending...');
+    console.log(`� Triggering: ${key} (${trigger.name})`);
     
     // Clear the last pressed indicator after 2 seconds
     setTimeout(() => setLastPressed(null), 2000);
 
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      // Send immediately if connected
-      wsRef.current.send(key);
-      console.log(`Sent immediately: ${key}`);
-    } else {
-      // Queue message if not connected
-      setMessageQueue(prev => {
-        const newQueue = [...prev, key];
-        // Keep only the last 10 messages to prevent memory issues
-        return newQueue.slice(-10);
+    try {
+      const response = await fetch(`${HTTP_SERVER}/api/trigger`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ key, action: trigger.name }),
+        signal: AbortSignal.timeout(5000), // 5 second timeout
       });
-      console.log(`Queued message: ${key}`);
-      
-      // Try to reconnect if not already trying
-      if (!isConnected && !reconnectTimeoutRef.current) {
-        connectWebSocket();
-      }
-    }
-  };
 
-  const forceReconnect = () => {
-    setRetryCount(0);
-    connectWebSocket();
+      if (response.ok) {
+        const result = await response.json();
+        console.log(`✅ Successfully sent: ${key}`, result);
+        setConnectionStatus(`Sent to ${result.clients || 0} client(s)`);
+        setLastError(null);
+        
+        // Reset status after 3 seconds
+        setTimeout(() => {
+          if (isOnline) {
+            setConnectionStatus('Ready');
+          }
+        }, 3000);
+      } else {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+    } catch (error) {
+      console.error(`❌ Failed to send: ${key}`, error);
+      const errorMessage = error instanceof Error ? error.message : 'Request failed';
+      setConnectionStatus('Error');
+      setLastError(errorMessage);
+      
+      // Reset status after 5 seconds
+      setTimeout(() => {
+        if (isOnline) {
+          setConnectionStatus('Ready');
+          setLastError(null);
+        }
+      }, 5000);
+    }
   };
 
   return (
@@ -203,9 +118,17 @@ export default function Home() {
             Face Controller
           </h1>
           <div className="flex items-center justify-center gap-2">
-            <div className={`w-3 h-3 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-500'}`}></div>
+            <div className={`w-3 h-3 rounded-full ${
+              isOnline 
+                ? connectionStatus === 'Ready' 
+                  ? 'bg-green-500' 
+                  : connectionStatus === 'Sending...' 
+                    ? 'bg-blue-500' 
+                    : 'bg-yellow-500'
+                : 'bg-red-500'
+            }`}></div>
             <span className="text-sm text-gray-600 dark:text-gray-300">
-              {connectionStatus}
+              {isOnline ? connectionStatus : 'Offline'}
             </span>
           </div>
         </div>
@@ -216,14 +139,14 @@ export default function Home() {
             <button
               key={trigger.key}
               onClick={() => triggerAnimation(trigger.key)}
+              disabled={!isOnline}
               className={`
                 p-2 rounded-lg text-center transition-all duration-200 shadow-md
-                ${isConnected 
+                ${isOnline 
                   ? 'bg-white dark:bg-gray-800 hover:bg-blue-50 dark:hover:bg-gray-700 active:scale-95' 
-                  : 'bg-orange-100 dark:bg-orange-900 hover:bg-orange-200 dark:hover:bg-orange-800 active:scale-95'
+                  : 'bg-gray-300 dark:bg-gray-600 cursor-not-allowed opacity-50'
                 }
                 ${lastPressed === trigger.name ? 'ring-2 ring-blue-500 ring-opacity-50' : ''}
-                ${!isConnected ? 'border border-orange-300 dark:border-orange-600' : ''}
               `}
             >
               <div className="text-lg mb-1">{trigger.emoji}</div>
@@ -233,70 +156,49 @@ export default function Home() {
               <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
                 {trigger.key}
               </div>
-              {!isConnected && (
-                <div className="text-xs text-orange-600 dark:text-orange-300 mt-1">
-                  Will queue
-                </div>
-              )}
             </button>
           ))}
         </div>
 
-        {/* Connection Help */}
-        {!isConnected && (
-          <div className="mt-4 bg-yellow-50 dark:bg-yellow-900 border border-yellow-200 dark:border-yellow-700 rounded-lg p-3">
+        {/* Error Display */}
+        {lastError && (
+          <div className="mt-4 bg-red-50 dark:bg-red-900 border border-red-200 dark:border-red-700 rounded-lg p-3">
             <div className="flex items-center">
-              <div className="text-yellow-400 mr-2">⚠️</div>
+              <div className="text-red-400 mr-2">❌</div>
               <div className="flex-1">
-                <p className="text-xs text-yellow-800 dark:text-yellow-200">
-                  {connectionStatus}
+                <p className="text-xs text-red-800 dark:text-red-200">
+                  Connection Error
                 </p>
-                {messageQueue.length > 0 && (
-                  <p className="text-xs text-yellow-600 dark:text-yellow-300 mt-1">
-                    {messageQueue.length} message(s) queued for when connected
-                  </p>
-                )}
-                <div className="mt-2 flex gap-2">
-                  <button
-                    onClick={forceReconnect}
-                    className="text-xs bg-yellow-600 text-white px-3 py-1 rounded hover:bg-yellow-700"
-                  >
-                    Force Reconnect
-                  </button>
-                  {messageQueue.length > 0 && (
-                    <button
-                      onClick={processMessageQueue}
-                      className="text-xs bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700"
-                    >
-                      Retry Queue
-                    </button>
-                  )}
-                </div>
-                {retryCount > 0 && (
-                  <span className="text-xs text-yellow-600 dark:text-yellow-300 mt-1 block">
-                    Attempt #{retryCount}
-                  </span>
-                )}
+                <p className="text-xs text-red-600 dark:text-red-300 mt-1">
+                  {lastError}
+                </p>
               </div>
             </div>
           </div>
         )}
 
-        {/* Connection Info for Connected State */}
-        {isConnected && retryCount > 0 && (
-          <div className="mt-4 bg-green-50 dark:bg-green-900 border border-green-200 dark:border-green-700 rounded-lg p-3">
+        {/* Offline Status */}
+        {!isOnline && (
+          <div className="mt-4 bg-yellow-50 dark:bg-yellow-900 border border-yellow-200 dark:border-yellow-700 rounded-lg p-3">
             <div className="flex items-center">
-              <div className="text-green-400 mr-2">✅</div>
-              <p className="text-xs text-green-800 dark:text-green-200">
-                WebSocket reconnected after {retryCount} attempt(s)
-              </p>
+              <div className="text-yellow-400 mr-2">📱</div>
+              <div className="flex-1">
+                <p className="text-xs text-yellow-800 dark:text-yellow-200">
+                  No internet connection
+                </p>
+                <p className="text-xs text-yellow-600 dark:text-yellow-300 mt-1">
+                  Commands will work when connection is restored
+                </p>
+              </div>
             </div>
           </div>
         )}
 
         {/* Footer */}
         <div className="mt-4 text-center">
-         
+          <p className="text-xs text-gray-500 dark:text-gray-400">
+            HTTP API: {HTTP_SERVER}/api/trigger
+          </p>
         </div>
       </div>
     </div>
