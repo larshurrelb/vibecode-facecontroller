@@ -93,17 +93,20 @@ export default function Home() {
     cleanup();
     
     try {
+      console.log('🔄 Attempting DIRECT WebSocket connection from browser to:', WS_SERVER);
       setConnectionStatus(`Connecting...${retryCount > 0 ? ` (attempt ${retryCount + 1})` : ''}`);
       wsRef.current = new WebSocket(WS_SERVER);
 
       wsRef.current.onopen = () => {
-        console.log('Connected to Deno animation server');
+        console.log('✅ WebSocket connected DIRECTLY from browser to Deno server');
+        console.log('📍 Client IP making connection:', window.navigator.userAgent);
+        console.log('🌐 Connection is client-side, NOT through Vercel servers');
         setIsConnected(true);
-        setConnectionStatus('Connected');
+        setConnectionStatus('Connected (Direct)');
         setRetryCount(0);
         lastHeartbeatRef.current = Date.now();
         startHeartbeat();
-        processMessageQueue();
+        processMessageQueue(); // Process queued messages
       };
 
       wsRef.current.onmessage = (event) => {
@@ -250,17 +253,27 @@ export default function Home() {
                 </p>
                 {messageQueue.length > 0 && (
                   <p className="text-xs text-yellow-600 dark:text-yellow-300 mt-1">
-                    {messageQueue.length} message(s) queued
+                    {messageQueue.length} message(s) queued for when connected
                   </p>
                 )}
-                <button
-                  onClick={forceReconnect}
-                  className="mt-2 text-xs bg-yellow-600 text-white px-3 py-1 rounded hover:bg-yellow-700 mr-2"
-                >
-                  Force Reconnect
-                </button>
+                <div className="mt-2 flex gap-2">
+                  <button
+                    onClick={forceReconnect}
+                    className="text-xs bg-yellow-600 text-white px-3 py-1 rounded hover:bg-yellow-700"
+                  >
+                    Force Reconnect
+                  </button>
+                  {messageQueue.length > 0 && (
+                    <button
+                      onClick={processMessageQueue}
+                      className="text-xs bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700"
+                    >
+                      Retry Queue
+                    </button>
+                  )}
+                </div>
                 {retryCount > 0 && (
-                  <span className="text-xs text-yellow-600 dark:text-yellow-300">
+                  <span className="text-xs text-yellow-600 dark:text-yellow-300 mt-1 block">
                     Attempt #{retryCount}
                   </span>
                 )}
@@ -275,7 +288,7 @@ export default function Home() {
             <div className="flex items-center">
               <div className="text-green-400 mr-2">✅</div>
               <p className="text-xs text-green-800 dark:text-green-200">
-                Reconnected successfully after {retryCount} attempt(s)
+                WebSocket reconnected after {retryCount} attempt(s)
               </p>
             </div>
           </div>
